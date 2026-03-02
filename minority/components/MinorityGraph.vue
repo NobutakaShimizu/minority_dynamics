@@ -1,20 +1,40 @@
 <script setup lang="ts">
 import { ref, computed, watch, onUnmounted } from 'vue'
 
-const N = ref(100) // 頂点数 100〜1000
-const radius = 180
-const centerX = 220
-const centerY = 220
-const nodeR = 3
+const N = ref(100) // 頂点数 100〜40000
+const MAX_HISTORY = 5000 // プロットに保持する最大点数
 
 // 頂点0 = 頂点1（常に黒、更新しない）
 const colors = ref<number[]>([])
-const h = ref(5) // 奇数のみ 1,3,...,99
+const h = ref(5) // 1〜N（つまみは奇数、テキストで任意の整数）
+
+// 1〜N の最大奇数（つまみの max）
+const maxOdd = computed(() => {
+  const n = N.value
+  return n >= 1 ? (n % 2 === 1 ? n : n - 1) : 1
+})
+
+// つまみ用：現在の h を奇数に丸めた値（表示・操作用）
+const hSliderValue = computed({
+  get: () => {
+    const odd = h.value % 2 === 1 ? h.value : h.value - 1
+    return Math.max(1, Math.min(maxOdd.value, odd))
+  },
+  set: (v: number) => {
+    h.value = v
+  },
+})
+
+function onHInput(e: Event) {
+  const v = parseInt((e.target as HTMLInputElement).value, 10)
+  if (!isNaN(v)) h.value = Math.max(1, Math.min(N.value, v))
+}
 const initialBlackRatio = ref(0.5)
 const mode = ref<'sync' | 'async'>('sync')
 const running = ref(false)
 const fps = ref(8) // アニメーションのFPS（1〜30）
 const roundCount = ref(0) // 経過ラウンド数
+const history = ref<{ round: number; ratio: number }[]>([]) // ラウンドごとの黒割合（プロット用）
 let timerId: ReturnType<typeof setInterval> | null = null
 
 // 全体の黒頂点数を initialBlackRatio に合わせる（頂点1は常に黒のため含める）
@@ -53,6 +73,10 @@ watch(initialBlackRatio, () => {
 
 watch(N, () => {
   initState()
+  roundCount.value = 0
+  const c = colors.value
+  if (c.length) history.value = [{ round: 0, ratio: (c.filter((x) => x === 1).length / c.length) * 100 }]
+  h.value = Math.max(1, Math.min(N.value, h.value))
 })
 
 watch(fps, () => {
@@ -65,6 +89,7 @@ function getMinorityColor(indices: number[]): number {
   const white = sampled.length - black
   if (black === 0) return 0
   if (white === 0) return 1
+  if (black === white) return Math.random() < 0.5 ? 1 : 0 // tie はランダムに break
   return black < white ? 1 : 0
 }
 
@@ -89,6 +114,9 @@ function step() {
   }
   colors.value = next
   roundCount.value++
+  const ratio = (next.filter((c) => c === 1).length / n) * 100
+  history.value.push({ round: roundCount.value, ratio })
+  if (history.value.length > MAX_HISTORY) history.value.shift()
   // 全頂点が黒になったら停止
   if (next.every((c) => c === 1)) {
     stop()
@@ -121,80 +149,27 @@ function reset() {
   stop()
   roundCount.value = 0
   initState()
+  const n = colors.value.length
+  const black = colors.value.filter((c) => c === 1).length
+  history.value = [{ round: 0, ratio: n ? (black / n) * 100 : 0 }]
 }
 
-const nodePositions = computed(() => {
-  const n = N.value
-  const positions: { x: number; y: number }[] = []
-  // 頂点1（index 0）は中央に配置
-  positions[0] = { x: centerX, y: centerY }
-  // 頂点2〜n を floor(n/100) 個の同心円に年輪状に配置
-  const nCircle = n - 1
-  const numRings = Math.max(1, Math.floor(n / 100))
-  const base = Math.floor(nCircle / numRings)
-  const remainder = nCircle % numRings
-  const counts: number[] = []
-  for (let c = 0; c < numRings; c++) {
-    counts.push(base + (c < remainder ? 1 : 0))
-  }
-  const cumsum: number[] = []
-  let s = 0
-  for (let c = 0; c < numRings; c++) {
-    s += counts[c]
-    cumsum.push(s)
-  }
-  for (let i = 1; i < n; i++) {
-    let c = 0
-    while (c < numRings && cumsum[c] < i) c++
-    const prev = c === 0 ? 0 : cumsum[c - 1]
-    const countThisRing = counts[c]
-    const j = i - 1 - prev
-    const angle = (2 * Math.PI * j) / countThisRing - Math.PI / 2
-    const r = radius * (c + 1) / numRings
-    positions[i] = {
-      x: centerX + r * Math.cos(angle),
-      y: centerY + r * Math.sin(angle),
-    }
-  }
-  return positions
+// プロット用パス（時刻=ラウンド vs 黒頂点割合%）
+const plotWidth = 1000
+const plotHeight = 280
+const plotMargin = { left: 44, top: 20, right: 20, bottom: 36 }
+
+const plotPath = computed(() => {
+  const pts = history.value
+  if (pts.length === 0) return ''
+  const maxR = Math.max(1, ...pts.map((p) => p.round))
+  const x = (r: number) => plotMargin.left + (r / maxR) * (plotWidth - plotMargin.left - plotMargin.right)
+  const y = (ratio: number) =>
+    plotMargin.top + (1 - ratio / 100) * (plotHeight - plotMargin.top - plotMargin.bottom)
+  return pts.map((p) => `${x(p.round)},${y(p.ratio)}`).join(' ')
 })
 
-// 完全グラフの一部の辺のみ描画（中央-最内円、各円環上の隣接）
-const edgePairs = computed(() => {
-  const n = N.value
-  const pos = nodePositions.value
-  const pairs: { x1: number; y1: number; x2: number; y2: number }[] = []
-  const numRings = Math.max(1, Math.floor(n / 100))
-  const nCircle = n - 1
-  const base = Math.floor(nCircle / numRings)
-  const remainder = nCircle % numRings
-  const counts: number[] = []
-  for (let c = 0; c < numRings; c++) counts.push(base + (c < remainder ? 1 : 0))
-  const cumsum: number[] = []
-  let s = 0
-  for (let c = 0; c < numRings; c++) {
-    s += counts[c]
-    cumsum.push(s)
-  }
-  // 中央の頂点1から最内円の頂点へ（見やすさのため最内円のみ）
-  const firstRingEnd = cumsum[0]
-  for (let i = 1; i <= firstRingEnd; i++) {
-    pairs.push({ x1: pos[0].x, y1: pos[0].y, x2: pos[i].x, y2: pos[i].y })
-  }
-  // 各円環内で隣接する頂点同士を結ぶ
-  let idx = 1
-  for (let c = 0; c < numRings; c++) {
-    const countThisRing = counts[c]
-    for (let j = 0; j < countThisRing; j++) {
-      const i = idx + j
-      const nextJ = (j + 1) % countThisRing
-      const iNext = idx + nextJ
-      pairs.push({ x1: pos[i].x, y1: pos[i].y, x2: pos[iNext].x, y2: pos[iNext].y })
-    }
-    idx += countThisRing
-  }
-  return pairs
-})
+const plotViewBox = `${0} ${0} ${plotWidth} ${plotHeight}`
 
 // 黒頂点の割合（%）
 const blackRatio = computed(() => {
@@ -205,6 +180,11 @@ const blackRatio = computed(() => {
 })
 
 initState()
+// 初期状態をプロットに1点追加
+const c0 = colors.value
+if (c0.length) {
+  history.value = [{ round: 0, ratio: (c0.filter((x) => x === 1).length / c0.length) * 100 }]
+}
 onUnmounted(() => stop())
 </script>
 
@@ -234,23 +214,31 @@ onUnmounted(() => stop())
             v-model.number="N"
             type="range"
             min="100"
-            max="1000"
-            step="10"
-            class="slider"
+            max="40000"
+            step="500"
+            class="slider slider-n"
           />
           <span class="value">{{ N }}</span>
         </label>
         <label class="slider-label">
-          <span>h（奇数）</span>
+          <span>h（1〜nの奇数）</span>
           <input
-            v-model.number="h"
+            v-model.number="hSliderValue"
             type="range"
             min="1"
-            max="99"
+            :max="maxOdd"
             step="2"
             class="slider"
           />
           <span class="value">{{ h }}</span>
+          <input
+            type="number"
+            :value="h"
+            :min="1"
+            :max="N"
+            class="h-input"
+            @input="onHInput"
+          />
         </label>
         <label class="slider-label">
           <span>初期黒割合</span>
@@ -287,56 +275,52 @@ onUnmounted(() => stop())
         </label>
       </div>
     </div>
-    <svg
-      :width="440"
-      :height="440"
-      viewBox="0 0 440 440"
-      class="graph-svg"
-    >
-      <!-- 完全グラフの辺（隣接する頂点同士のみ薄く表示） -->
-      <g stroke="#e0e0e0" stroke-width="0.2" opacity="0.35">
-        <line
-          v-for="(pair, idx) in edgePairs"
-          :key="`e-${idx}`"
-          :x1="pair.x1"
-          :y1="pair.y1"
-          :x2="pair.x2"
-          :y2="pair.y2"
-        />
-      </g>
-      <!-- 頂点 -->
-      <g>
-        <circle
-          v-for="(pos, i) in nodePositions"
-          :key="i"
-          :cx="pos.x"
-          :cy="pos.y"
-          :r="nodeR"
-          :fill="colors[i] ? '#111' : '#fff'"
-          stroke="#555"
-          stroke-width="0.4"
-        />
-      </g>
-      <!-- 経過ラウンド数・黒頂点割合（右下） -->
-      <text
-        x="430"
-        y="428"
-        text-anchor="end"
-        class="round-count-text"
+    <div class="plot-container">
+      <svg
+        :viewBox="plotViewBox"
+        class="plot-svg"
+        preserveAspectRatio="xMidYMid meet"
       >
+        <!-- 枠・軸 -->
+        <rect
+          :x="plotMargin.left"
+          :y="plotMargin.top"
+          :width="plotWidth - plotMargin.left - plotMargin.right"
+          :height="plotHeight - plotMargin.top - plotMargin.bottom"
+          fill="none"
+          stroke="#ccc"
+          stroke-width="1"
+        />
+        <text :x="plotMargin.left - 8" :y="plotMargin.top + 4" class="axis-label">100%</text>
+        <text :x="plotMargin.left - 8" :y="plotHeight - plotMargin.bottom + 4" class="axis-label">0%</text>
+        <text :x="plotMargin.left" :y="plotHeight - 4" class="axis-label">0</text>
+        <text :x="plotWidth - plotMargin.right - 56" :y="plotHeight - 4" class="axis-label">ラウンド →</text>
+        <!-- プロット線 -->
+        <polyline
+          v-if="history.length > 0"
+          :points="plotPath"
+          fill="none"
+          stroke="#1967d2"
+          stroke-width="1.5"
+          class="plot-line"
+        />
+      </svg>
+      <div class="plot-legend">
         ラウンド {{ roundCount }}　黒 {{ blackRatio }}%
-      </text>
-    </svg>
+      </div>
+    </div>
   </div>
 </template>
 
 <style scoped>
 .minority-graph {
+  width: 100%;
   display: flex;
   flex-direction: column;
-  align-items: center;
+  align-items: stretch;
   gap: 12px;
   padding: 8px;
+  box-sizing: border-box;
 }
 .controls-row {
   display: flex;
@@ -389,6 +373,14 @@ onUnmounted(() => stop())
   min-width: 36px;
   font-variant-numeric: tabular-nums;
 }
+.h-input {
+  width: 56px;
+  padding: 4px 6px;
+  font-size: 13px;
+  border: 1px solid #999;
+  border-radius: 4px;
+  box-sizing: border-box;
+}
 .action-buttons {
   display: flex;
   gap: 8px;
@@ -404,14 +396,31 @@ onUnmounted(() => stop())
 .btn.action {
   background: #fff;
 }
-.graph-svg {
+.plot-container {
+  width: 100%;
   border: 1px solid #ddd;
   border-radius: 8px;
   background: #fafafa;
+  padding: 8px;
+  box-sizing: border-box;
 }
-.round-count-text {
-  font-size: 14px;
-  fill: #333;
+.plot-svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+.axis-label {
+  font-size: 11px;
+  fill: #666;
   font-family: inherit;
+}
+.plot-legend {
+  margin-top: 6px;
+  font-size: 14px;
+  color: #333;
+  text-align: right;
+}
+.slider-n {
+  width: 120px;
 }
 </style>
