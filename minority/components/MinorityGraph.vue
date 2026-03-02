@@ -6,13 +6,18 @@ const MAX_HISTORY = 5000 // プロットに保持する最大点数
 
 // 頂点0 = 頂点1（常に黒、更新しない）
 const colors = ref<number[]>([])
-const h = ref(5) // 1〜N（つまみは奇数、テキストで任意の整数）
+const h = ref(5) // 1〜100 に限定（つまみは奇数、テキストで任意の整数）
 
-// 1〜N の最大奇数（つまみの max）
+// 1〜100 の最大奇数（つまみの max）
 const maxOdd = computed(() => {
   const n = N.value
-  return n >= 1 ? (n % 2 === 1 ? n : n - 1) : 1
+  const maxH = 99 // 奇数で 1〜100 に対応
+  const fromN = n >= 1 ? (n % 2 === 1 ? n : n - 1) : 1
+  return Math.min(maxH, fromN)
 })
+
+// h の上限（1〜100、かつ N 以下）
+const maxH = computed(() => Math.min(100, N.value))
 
 // つまみ用：現在の h を奇数に丸めた値（表示・操作用）
 const hSliderValue = computed({
@@ -27,7 +32,7 @@ const hSliderValue = computed({
 
 function onHInput(e: Event) {
   const v = parseInt((e.target as HTMLInputElement).value, 10)
-  if (!isNaN(v)) h.value = Math.max(1, Math.min(N.value, v))
+  if (!isNaN(v)) h.value = Math.max(1, Math.min(maxH.value, v))
 }
 const initialBlackRatio = ref(0.5)
 const mode = ref<'sync' | 'async'>('sync')
@@ -76,7 +81,7 @@ watch(N, () => {
   roundCount.value = 0
   const c = colors.value
   if (c.length) history.value = [{ round: 0, ratio: (c.filter((x) => x === 1).length / c.length) * 100 }]
-  h.value = Math.max(1, Math.min(N.value, h.value))
+  h.value = Math.max(1, Math.min(maxH.value, h.value))
 })
 
 watch(fps, () => {
@@ -221,7 +226,7 @@ onUnmounted(() => stop())
           <span class="value">{{ N }}</span>
         </label>
         <label class="slider-label">
-          <span>h（1〜nの奇数）</span>
+          <span>h（1〜100、奇数）</span>
           <input
             v-model.number="hSliderValue"
             type="range"
@@ -235,7 +240,7 @@ onUnmounted(() => stop())
             type="number"
             :value="h"
             :min="1"
-            :max="N"
+            :max="maxH"
             class="h-input"
             @input="onHInput"
           />

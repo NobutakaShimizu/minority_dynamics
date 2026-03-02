@@ -1,4 +1,4 @@
-name: Deploy pages
+name: Deploy Slidev to GitHub Pages
 
 on:
   workflow_dispatch:
@@ -17,34 +17,29 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
           node-version: 'lts/*'
-
-      - name: Setup @antfu/ni
-        run: npm i -g @antfu/ni
-
-      - run: npm install
+          cache: 'npm'
+          cache-dependency-path: minority/package-lock.json
 
       - name: Install dependencies
-        run: nci
+        run: npm ci
+        working-directory: minority
 
-      - name: Install chromium
-        run: npm i -D playwright-chromium
-
-      - name: Build
-        run: nr build --base /${{github.event.repository.name}}/
+      - name: Build Slidev
+        run: npm run build -- --base /${{ github.event.repository.name }}/
+        working-directory: minority
 
       - name: Setup Pages
         uses: actions/configure-pages@v4
 
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@3
         with:
-          path: dist
+          path: minority/dist
 
   deploy:
     environment:
