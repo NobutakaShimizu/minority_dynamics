@@ -17,20 +17,34 @@ const fps = ref(8) // アニメーションのFPS（1〜30）
 const roundCount = ref(0) // 経過ラウンド数
 let timerId: ReturnType<typeof setInterval> | null = null
 
+// 全体の黒頂点数を initialBlackRatio に合わせる（頂点1は常に黒のため含める）
 function initState() {
   const n = N.value
-  const arr = Array.from({ length: n }, (_, i) =>
-    i === 0 ? 1 : (Math.random() < initialBlackRatio.value ? 1 : 0)
-  )
+  const totalBlack = Math.max(1, Math.min(n, Math.round(initialBlackRatio.value * n)))
+  const blackAmongRest = totalBlack - 1 // 頂点2〜nのうち黒にする数（頂点1が1つ黒）
+  const indices = Array.from({ length: n - 1 }, (_, i) => i + 1)
+  for (let i = 0; i < n - 1; i++) {
+    const j = i + Math.floor(Math.random() * (n - 1 - i))
+    ;[indices[i], indices[j]] = [indices[j], indices[i]]
+  }
+  const blackSet = new Set(indices.slice(0, blackAmongRest))
+  const arr = Array.from({ length: n }, (_, i) => (i === 0 ? 1 : (blackSet.has(i) ? 1 : 0)))
   colors.value = arr
 }
 
-// 初期黒割合のつまみに合わせて頂点2〜100の色を動的に更新（頂点1は常に黒のまま）
+// 初期黒割合のつまみに合わせて、全体の黒割合が一致するよう頂点2〜nを再割り当て
 function applyInitialBlackRatio() {
-  colors.value = colors.value.map((c, i) => {
-    if (i === 0) return 1
-    return Math.random() < initialBlackRatio.value ? 1 : 0
-  })
+  const n = colors.value.length
+  if (n === 0) return
+  const totalBlack = Math.max(1, Math.min(n, Math.round(initialBlackRatio.value * n)))
+  const blackAmongRest = totalBlack - 1
+  const indices = Array.from({ length: n - 1 }, (_, i) => i + 1)
+  for (let i = 0; i < n - 1; i++) {
+    const j = i + Math.floor(Math.random() * (n - 1 - i))
+    ;[indices[i], indices[j]] = [indices[j], indices[i]]
+  }
+  const blackSet = new Set(indices.slice(0, blackAmongRest))
+  colors.value = colors.value.map((_, i) => (i === 0 ? 1 : (blackSet.has(i) ? 1 : 0)))
 }
 
 watch(initialBlackRatio, () => {
@@ -182,6 +196,14 @@ const edgePairs = computed(() => {
   return pairs
 })
 
+// 黒頂点の割合（%）
+const blackRatio = computed(() => {
+  const c = colors.value
+  if (!c.length) return '0'
+  const black = c.filter((x) => x === 1).length
+  return ((black / c.length) * 100).toFixed(1)
+})
+
 initState()
 onUnmounted(() => stop())
 </script>
@@ -295,14 +317,14 @@ onUnmounted(() => stop())
           stroke-width="0.4"
         />
       </g>
-      <!-- 経過ラウンド数（右下） -->
+      <!-- 経過ラウンド数・黒頂点割合（右下） -->
       <text
         x="430"
         y="428"
         text-anchor="end"
         class="round-count-text"
       >
-        ラウンド {{ roundCount }}
+        ラウンド {{ roundCount }}　黒 {{ blackRatio }}%
       </text>
     </svg>
   </div>
